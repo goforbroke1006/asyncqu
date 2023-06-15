@@ -18,4 +18,4 @@ type AsyncJobExecutor interface {
 	Errs() []error
 }
 
-type AsyncJobCallFn func(ctx context.Context, step StepName) error
+type AsyncJobCallFn func(ctx context.Context) error

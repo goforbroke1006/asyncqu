@@ -33,7 +33,7 @@ func (e *executorImpl) Append(step StepName, job AsyncJobCallFn, clauses ...Step
 func (e *executorImpl) AddEnd(steps ...StepName) {
 	e.registered = append(e.registered, &JobItem{
 		StepName: End,
-		Fn:       func(ctx context.Context, step StepName) error { return nil },
+		Fn:       func(ctx context.Context) error { return nil },
 		State:    Runnable,
 		Causes:   steps,
 	})
@@ -78,7 +78,9 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 					item.State = Running
 
 					go func(ctx context.Context, item *JobItem) {
-						if resErr := item.Fn(ctx, item.StepName); resErr != nil {
+						execFnCtx := context.WithValue(ctx, "step", item.StepName) //nolint:staticcheck
+
+						if resErr := item.Fn(execFnCtx); resErr != nil {
 							item.Err = resErr
 						}
 						item.State = Done

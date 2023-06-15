@@ -52,7 +52,7 @@ func Test_executor_AsyncRun(t *testing.T) {
 
 			executor := New()
 
-			executor.Append(labelStep1, func(ctx context.Context, step StepName) error {
+			executor.Append(labelStep1, func(ctx context.Context) error {
 				return nil
 			}, Start)
 			executor.AddEnd(labelStep1)
@@ -76,18 +76,24 @@ func Test_executor_AsyncRun(t *testing.T) {
 			executor := New()
 			spy := &stepVisitSpy{}
 
-			executor.Append(labelStep1, func(ctx context.Context, step StepName) error {
+			executor.Append(labelStep1, func(ctx context.Context) error {
+				step := ctx.Value("step").(StepName)
+
 				spy.Append(step)
 				t.Logf("step %s is done", step)
 				return nil
 			}, Start)
-			executor.Append(labelStep21, func(ctx context.Context, step StepName) error {
+			executor.Append(labelStep21, func(ctx context.Context) error {
+				step := ctx.Value("step").(StepName)
+
 				time.Sleep(250 * time.Millisecond)
 				spy.Append(step)
 				t.Logf("step %s is done", step)
 				return nil
 			}, labelStep1)
-			executor.Append(labelStep22, func(ctx context.Context, step StepName) error {
+			executor.Append(labelStep22, func(ctx context.Context) error {
+				step := ctx.Value("step").(StepName)
+
 				spy.Append(step)
 				t.Logf("step %s is done", step)
 				return nil

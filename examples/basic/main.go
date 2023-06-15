@@ -21,35 +21,35 @@ func main() {
 		LabelStep4Additional1 = asyncqu.StepName("step-4-additional-1")
 	)
 
-	executor.Append(LabelStep1LoadData, func(ctx context.Context, step asyncqu.StepName) error {
+	executor.Append(LabelStep1LoadData, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		fmt.Println("step 1 done")
 		return nil
 	}, asyncqu.Start)
 
-	executor.Append(LabelStep2FilterData, func(ctx context.Context, step asyncqu.StepName) error {
+	executor.Append(LabelStep2FilterData, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		fmt.Println("step 2 done")
 		return nil
 	}, LabelStep1LoadData)
 
-	executor.Append(LabelStep3Aggregate1, func(ctx context.Context, step asyncqu.StepName) error {
+	executor.Append(LabelStep3Aggregate1, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		fmt.Println("step 3 done 1")
 		return nil
 	}, LabelStep2FilterData)
-	executor.Append(LabelStep3Aggregate2, func(ctx context.Context, step asyncqu.StepName) error {
+	executor.Append(LabelStep3Aggregate2, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		fmt.Println("step 3 done 2")
 		return nil
 	}, LabelStep2FilterData)
-	executor.Append(LabelStep3Aggregate3, func(ctx context.Context, step asyncqu.StepName) error {
+	executor.Append(LabelStep3Aggregate3, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		fmt.Println("step 3 done 3")
 		return nil
 	}, LabelStep2FilterData)
 
-	executor.Append(LabelStep4Additional1, func(ctx context.Context, step asyncqu.StepName) error {
+	executor.Append(LabelStep4Additional1, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		fmt.Println("step 4 additional 1")
 		return nil
