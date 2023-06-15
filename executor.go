@@ -18,6 +18,7 @@ type executorImpl struct {
 	startedFlag     bool
 	causesDone      map[StepName]struct{}
 	allJobsDoneChan chan struct{}
+	doneFlag        bool
 }
 
 func (e *executorImpl) Append(step StepName, job AsyncJobCallFn, clauses ...StepName) {
@@ -94,6 +95,7 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 		}
 
 		close(doneCh)
+		e.doneFlag = true
 		e.allJobsDoneChan <- struct{}{}
 	}()
 
@@ -117,6 +119,10 @@ func (e *executorImpl) Errs() []error {
 	}
 
 	return errs
+}
+
+func (e *executorImpl) IsDone() bool {
+	return e.doneFlag
 }
 
 func (e *executorImpl) isCausesDone(steps ...StepName) bool {

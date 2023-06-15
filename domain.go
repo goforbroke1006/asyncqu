@@ -14,6 +14,7 @@ type AsyncJobExecutor interface {
 	AddEnd(steps ...StepName)
 	AsyncRun(ctx context.Context) error
 	Wait() error
+	IsDone() bool
 	Errs() []error
 }
 
