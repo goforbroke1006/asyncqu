@@ -1,3 +1,3 @@
 # asyncqu
 
-[![Go Coverage](https://github.com/goforbroke1006/asyncqu/wiki/coverage.svg)](https://github.com/goforbroke1006/asyncqu/wiki/Test-coverage-report)
+[![Coverage Status](https://coveralls.io/repos/github/goforbroke1006/asyncqu/badge.svg)](https://coveralls.io/github/goforbroke1006/asyncqu)

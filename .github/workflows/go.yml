@@ -34,9 +34,9 @@ jobs:
     - name: Lint
       run: make lint
 
-    - name: Coverage report
-      uses: ncruces/go-coverage-report@v0
-      with:
-        chart: 'true'
-        amend: 'true'
-      continue-on-error: true
+    - name: Install goveralls
+      run: go install github.com/mattn/goveralls@latest
+    - name: Send coverage
+      env:
+        COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: goveralls -coverprofile=coverage.out -service=github
