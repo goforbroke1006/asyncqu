@@ -101,7 +101,7 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 }
 
 func (e *executorImpl) Wait() error {
-	if e.startedFlag == false {
+	if !e.startedFlag {
 		return ErrExecutorWasNotStarted
 	}
 	<-e.allJobsDoneChan
