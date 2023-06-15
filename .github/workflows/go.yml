@@ -34,6 +34,8 @@ jobs:
     - name: Lint
       run: make lint
 
+    - name: Create wiki directory
+      run: mkdir -p ./wiki
     - name: Update coverage report
       uses: ncruces/go-coverage-report@v0
       with:
