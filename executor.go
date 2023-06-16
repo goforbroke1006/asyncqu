@@ -12,7 +12,7 @@ func New() AsyncJobExecutor {
 		causesDone:      map[StepName]struct{}{},
 		allJobsDoneChan: make(chan struct{}),
 		doneFlag:        false,
-		onChangesCb:     func(name StepName, state JobState) {},
+		onChangesCb:     func(name StepName, state JobState, err error) {},
 	}
 }
 
@@ -22,10 +22,10 @@ type executorImpl struct {
 	causesDone      map[StepName]struct{}
 	allJobsDoneChan chan struct{}
 	doneFlag        bool
-	onChangesCb     func(name StepName, state JobState)
+	onChangesCb     OnChangedCb
 }
 
-func (e *executorImpl) SetOnChanges(cb func(name StepName, state JobState)) {
+func (e *executorImpl) SetOnChanges(cb OnChangedCb) {
 	e.onChangesCb = cb
 }
 
@@ -84,7 +84,7 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 
 				if item.State == Runnable && e.isCausesDone(item.Causes...) {
 					item.State = Running
-					e.onChangesCb(item.StepName, item.State)
+					e.onChangesCb(item.StepName, item.State, nil)
 
 					go func(ctx context.Context, item *JobItem) {
 						execFnCtx := context.WithValue(ctx, "step", item.StepName) //nolint:staticcheck
@@ -94,7 +94,7 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 						}
 
 						item.State = Done
-						e.onChangesCb(item.StepName, item.State)
+						e.onChangesCb(item.StepName, item.State, item.Err)
 
 						doneCh <- item.StepName
 					}(ctx, item)

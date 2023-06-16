@@ -21,8 +21,8 @@ func main() {
 		LabelStep4Additional1 = asyncqu.StepName("phase-4-additional-1")
 	)
 
-	executor.SetOnChanges(func(name asyncqu.StepName, state asyncqu.JobState) {
-		fmt.Printf("step %s in status %s\n", name, state)
+	executor.SetOnChanges(func(name asyncqu.StepName, state asyncqu.JobState, err error) {
+		fmt.Printf("step %s in status %s with %v error\n", name, state, err)
 	})
 
 	executor.Append(LabelStep1LoadData, func(ctx context.Context) error {
