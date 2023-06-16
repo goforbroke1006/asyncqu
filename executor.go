@@ -8,8 +8,11 @@ import (
 func New() AsyncJobExecutor {
 	return &executorImpl{
 		registered:      []*JobItem{},
+		startedFlag:     false,
 		causesDone:      map[StepName]struct{}{},
 		allJobsDoneChan: make(chan struct{}),
+		doneFlag:        false,
+		onChangesCb:     func(name StepName, state JobState) {},
 	}
 }
 
@@ -19,6 +22,11 @@ type executorImpl struct {
 	causesDone      map[StepName]struct{}
 	allJobsDoneChan chan struct{}
 	doneFlag        bool
+	onChangesCb     func(name StepName, state JobState)
+}
+
+func (e *executorImpl) SetOnChanges(cb func(name StepName, state JobState)) {
+	e.onChangesCb = cb
 }
 
 func (e *executorImpl) Append(step StepName, job AsyncJobCallFn, clauses ...StepName) {
@@ -76,6 +84,7 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 
 				if item.State == Runnable && e.isCausesDone(item.Causes...) {
 					item.State = Running
+					e.onChangesCb(item.StepName, item.State)
 
 					go func(ctx context.Context, item *JobItem) {
 						execFnCtx := context.WithValue(ctx, "step", item.StepName) //nolint:staticcheck
@@ -83,7 +92,10 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 						if resErr := item.Fn(execFnCtx); resErr != nil {
 							item.Err = resErr
 						}
+
 						item.State = Done
+						e.onChangesCb(item.StepName, item.State)
+
 						doneCh <- item.StepName
 					}(ctx, item)
 				}

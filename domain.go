@@ -4,12 +4,8 @@ import (
 	"context"
 )
 
-const (
-	Start = StepName("start")
-	End   = StepName("end")
-)
-
 type AsyncJobExecutor interface {
+	SetOnChanges(cb func(name StepName, state JobState))
 	Append(step StepName, job AsyncJobCallFn, clauses ...StepName)
 	AddEnd(steps ...StepName)
 	AsyncRun(ctx context.Context) error
