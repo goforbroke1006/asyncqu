@@ -82,6 +82,11 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 			for _, item := range e.registered {
 				allDone = allDone && item.State == Done
 
+				if e.isAnyCausesFailed(item.Causes...) {
+					allDone = true
+					break
+				}
+
 				if item.State == Runnable && e.isCausesDone(item.Causes...) {
 					item.State = Running
 					e.onChangesCb(item.StepName, item.State, nil)
@@ -139,11 +144,26 @@ func (e *executorImpl) IsDone() bool {
 	return e.doneFlag
 }
 
-func (e *executorImpl) isCausesDone(steps ...StepName) bool {
-	for _, s := range steps {
+func (e *executorImpl) isCausesDone(causes ...StepName) bool {
+	for _, s := range causes {
 		if _, exists := e.causesDone[s]; !exists {
 			return false
 		}
 	}
 	return true
+}
+
+func (e *executorImpl) isAnyCausesFailed(causes ...StepName) bool {
+	for _, s := range causes {
+		for _, item := range e.registered {
+			if item.StepName != s {
+				continue
+			}
+
+			if item.State == Done && item.Err != nil {
+				return true
+			}
+		}
+	}
+	return false
 }

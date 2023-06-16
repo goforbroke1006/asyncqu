@@ -2,6 +2,7 @@ package asyncqu
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,57 @@ func Test_executor_Wait(t *testing.T) {
 }
 
 func Test_executor_AsyncRun(t *testing.T) {
+	t.Run("negative", func(t *testing.T) {
+		t.Run("step 1 failed", func(t *testing.T) {
+			var stepFakeErr = errors.New("fake error")
+
+			const (
+				labelStep1  = StepName("step-1")
+				labelStep21 = StepName("step-2-1")
+				labelStep22 = StepName("step-2-2")
+			)
+			// start --> step-1 --> step-2-1  --> end
+			//                 \--> step-2-2 /
+
+			executor := New()
+			spy := &stepVisitSpy{}
+
+			executor.Append(labelStep1, func(ctx context.Context) error {
+				step := ctx.Value("step").(StepName)
+
+				spy.Append(step)
+				t.Logf("step %s is done", step)
+				return stepFakeErr
+			}, Start)
+			executor.Append(labelStep21, func(ctx context.Context) error {
+				step := ctx.Value("step").(StepName)
+
+				time.Sleep(250 * time.Millisecond)
+				spy.Append(step)
+				t.Logf("step %s is done", step)
+				return nil
+			}, labelStep1)
+			executor.Append(labelStep22, func(ctx context.Context) error {
+				step := ctx.Value("step").(StepName)
+
+				spy.Append(step)
+				t.Logf("step %s is done", step)
+				return nil
+			}, labelStep1)
+			executor.AddEnd(labelStep21, labelStep22)
+
+			execErr := executor.AsyncRun(context.TODO())
+			waitErr := executor.Wait()
+
+			assert.NoError(t, execErr)
+			assert.NoError(t, waitErr)
+			assert.Len(t, executor.Errs(), 1)
+
+			assert.Equal(t, 1, spy.Len())
+			assert.Equal(t, labelStep1, spy.At(0))
+		})
+	})
+
 	t.Run("positive", func(t *testing.T) {
 		t.Run("only start and stop", func(t *testing.T) {
 			executor := New()
@@ -106,6 +158,8 @@ func Test_executor_AsyncRun(t *testing.T) {
 			assert.NoError(t, execErr)
 			assert.NoError(t, waitErr)
 			assert.Len(t, executor.Errs(), 0)
+
+			assert.Equal(t, 3, spy.Len())
 			assert.Equal(t, labelStep1, spy.At(0))
 			assert.Equal(t, labelStep22, spy.At(1))
 			assert.Equal(t, labelStep21, spy.At(2))
