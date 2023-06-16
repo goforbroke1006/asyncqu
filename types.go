@@ -1,13 +1,14 @@
 package asyncqu
 
-type StepName string
+type StageName string
 
-type JobState string
+type State string
 
-type JobItem struct {
-	StepName StepName
-	Fn       AsyncJobCallFn
-	State    JobState
-	Causes   []StepName
-	Err      error
+type StageMeta struct {
+	Name           StageName
+	Fn             StageFn
+	State          State
+	Causes         []StageName
+	CausesRequired bool
+	Err            error
 }

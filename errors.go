@@ -3,6 +3,6 @@ package asyncqu
 import "errors"
 
 var (
-	ErrExecutorWasNotStarted = errors.New("executor was not started")
-	ErrEndStepIsNotSpecified = errors.New("end step is not specifier")
+	ErrExecutorWasNotStarted  = errors.New("executor was not started")
+	ErrEndStageIsNotSpecified = errors.New("end stage is not specifier")
 )

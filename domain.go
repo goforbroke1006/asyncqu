@@ -1,19 +1,20 @@
 package asyncqu
 
-import (
-	"context"
-)
+import "context"
 
-type AsyncJobExecutor interface {
+type Executor interface {
 	SetOnChanges(cb OnChangedCb)
-	Append(step StepName, job AsyncJobCallFn, clauses ...StepName)
-	AddEnd(steps ...StepName)
+	Append(stageName StageName, fn StageFn, clauses ...StageName)
+	SetFinal(fn StageFn)
+	SetEnd(stageNames ...StageName)
 	AsyncRun(ctx context.Context) error
 	Wait() error
 	IsDone() bool
 	Errs() []error
 }
 
-type OnChangedCb func(name StepName, state JobState, err error)
+type OnChangedCb func(stageName StageName, state State, err error)
 
-type AsyncJobCallFn func(ctx context.Context) error
+type StageFn func(ctx context.Context) error
+
+const ContextKeyStageName = StageName("stage-name")

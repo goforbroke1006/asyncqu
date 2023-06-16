@@ -1,12 +1,14 @@
 package asyncqu
 
 const (
-	Start = StepName("start")
-	End   = StepName("end")
+	Start = StageName("start")
+	Final = StageName("final")
+	End   = StageName("end")
 )
 
 const (
-	Runnable = JobState("runnable")
-	Running  = JobState("running")
-	Done     = JobState("done")
+	Runnable = State("runnable")
+	Running  = State("running")
+	Done     = State("done")
+	Skipped  = State("skipped")
 )

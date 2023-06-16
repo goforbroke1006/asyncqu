@@ -13,47 +13,47 @@ func main() {
 	executor := asyncqu.New()
 
 	const (
-		LabelStep1LoadData    = asyncqu.StepName("phase-1-load-data")
-		LabelStep2FilterData  = asyncqu.StepName("phase-2-filter-data")
-		LabelStep3Aggregate1  = asyncqu.StepName("phase-3-aggregate-1")
-		LabelStep3Aggregate2  = asyncqu.StepName("phase-3-aggregate-2")
-		LabelStep3Aggregate3  = asyncqu.StepName("phase-3-aggregate-3")
-		LabelStep4Additional1 = asyncqu.StepName("phase-4-additional-1")
+		stage1LoadData    = asyncqu.StageName("stage-1-load-data")
+		stage2FilterData  = asyncqu.StageName("stage-2-filter-data")
+		stage3Aggregate1  = asyncqu.StageName("stage-3-aggregate-1")
+		stage3Aggregate2  = asyncqu.StageName("stage-3-aggregate-2")
+		stage3Aggregate3  = asyncqu.StageName("stage-3-aggregate-3")
+		stage4Additional1 = asyncqu.StageName("stage-4-additional-1")
 	)
 
-	executor.SetOnChanges(func(name asyncqu.StepName, state asyncqu.JobState, err error) {
-		fmt.Printf("step %s in status %s with %v error\n", name, state, err)
+	executor.SetOnChanges(func(stageName asyncqu.StageName, state asyncqu.State, err error) {
+		fmt.Printf("step %s in status %s with %v error\n", stageName, state, err)
 	})
 
-	executor.Append(LabelStep1LoadData, func(ctx context.Context) error {
+	executor.Append(stage1LoadData, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		return nil
 	}, asyncqu.Start)
 
-	executor.Append(LabelStep2FilterData, func(ctx context.Context) error {
+	executor.Append(stage2FilterData, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		return nil
-	}, LabelStep1LoadData)
+	}, stage1LoadData)
 
-	executor.Append(LabelStep3Aggregate1, func(ctx context.Context) error {
+	executor.Append(stage3Aggregate1, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		return nil
-	}, LabelStep2FilterData)
-	executor.Append(LabelStep3Aggregate2, func(ctx context.Context) error {
+	}, stage2FilterData)
+	executor.Append(stage3Aggregate2, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		return nil
-	}, LabelStep2FilterData)
-	executor.Append(LabelStep3Aggregate3, func(ctx context.Context) error {
+	}, stage2FilterData)
+	executor.Append(stage3Aggregate3, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		return nil
-	}, LabelStep2FilterData)
+	}, stage2FilterData)
 
-	executor.Append(LabelStep4Additional1, func(ctx context.Context) error {
+	executor.Append(stage4Additional1, func(ctx context.Context) error {
 		time.Sleep(time.Second)
 		return nil
-	}, LabelStep3Aggregate3)
+	}, stage3Aggregate3)
 
-	executor.AddEnd(LabelStep3Aggregate1, LabelStep3Aggregate2, LabelStep4Additional1)
+	executor.SetEnd(stage3Aggregate1, stage3Aggregate2, stage4Additional1)
 
 	if runErr := executor.AsyncRun(context.Background()); runErr != nil {
 		fmt.Printf("ERROR: %s\n", runErr.Error())

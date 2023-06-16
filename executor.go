@@ -1,55 +1,60 @@
 package asyncqu
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
-func New() AsyncJobExecutor {
+func New() Executor {
 	return &executorImpl{
-		registered:      []*JobItem{},
+		registered:      []*StageMeta{},
 		startedFlag:     false,
-		causesDone:      map[StepName]struct{}{},
+		causesDone:      map[StageName]struct{}{},
 		allJobsDoneChan: make(chan struct{}),
 		doneFlag:        false,
-		onChangesCb:     func(name StepName, state JobState, err error) {},
+		onChangesCb:     func(name StageName, state State, err error) {},
+		finalCb:         nil,
 	}
 }
 
 type executorImpl struct {
-	registered      []*JobItem
+	registered      []*StageMeta
 	startedFlag     bool
-	causesDone      map[StepName]struct{}
+	causesDone      map[StageName]struct{}
 	allJobsDoneChan chan struct{}
 	doneFlag        bool
 	onChangesCb     OnChangedCb
+	finalCb         StageFn
 }
 
 func (e *executorImpl) SetOnChanges(cb OnChangedCb) {
 	e.onChangesCb = cb
 }
 
-func (e *executorImpl) Append(step StepName, job AsyncJobCallFn, clauses ...StepName) {
-	e.registered = append(e.registered, &JobItem{
-		StepName: step,
-		Fn:       job,
-		State:    Runnable,
-		Causes:   clauses,
+func (e *executorImpl) Append(stageName StageName, fn StageFn, clauses ...StageName) {
+	e.registered = append(e.registered, &StageMeta{
+		Name:           stageName,
+		Fn:             fn,
+		State:          Runnable,
+		Causes:         clauses,
+		CausesRequired: true,
 	})
 }
 
-func (e *executorImpl) AddEnd(steps ...StepName) {
-	e.registered = append(e.registered, &JobItem{
-		StepName: End,
-		Fn:       func(ctx context.Context) error { return nil },
-		State:    Runnable,
-		Causes:   steps,
+func (e *executorImpl) SetEnd(stageNames ...StageName) {
+	e.registered = append(e.registered, &StageMeta{
+		Name:           End,
+		Fn:             func(ctx context.Context) error { return nil },
+		State:          Runnable,
+		Causes:         stageNames,
+		CausesRequired: true,
 	})
+}
+
+func (e *executorImpl) SetFinal(job StageFn) {
+	e.finalCb = job
 }
 
 func (e *executorImpl) hasEnd() bool {
 	for _, reg := range e.registered {
-		if reg.StepName == End {
+		if reg.Name == End {
 			return true
 		}
 	}
@@ -58,65 +63,106 @@ func (e *executorImpl) hasEnd() bool {
 
 func (e *executorImpl) AsyncRun(ctx context.Context) error {
 	if !e.hasEnd() {
-		return ErrEndStepIsNotSpecified
+		return ErrEndStageIsNotSpecified
 	}
 
 	e.startedFlag = true
 	e.causesDone[Start] = struct{}{}
 
-	doneCh := make(chan StepName)
+	var (
+		allSkippedCh = make(chan struct{})
+		doneCh       = make(chan StageName)
+		execNextCh   = make(chan struct{})
+	)
+
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case label := <-doneCh:
-				e.causesDone[label] = struct{}{}
+			case _, isOpen := <-allSkippedCh:
+				if !isOpen {
+					break
+				}
+				execNextCh <- struct{}{}
+			case stageName, isOpen := <-doneCh:
+				if !isOpen {
+					break
+				}
+				e.causesDone[stageName] = struct{}{}
+				execNextCh <- struct{}{}
 			}
 		}
 	}()
 
 	go func() {
+	ExecLoop:
 		for {
-			allDone := true
-			for _, item := range e.registered {
-				allDone = allDone && item.State == Done
+			select {
+			case <-ctx.Done():
+				return
+			case <-execNextCh:
+				allDone := true
+				skippedCount := 0
 
-				if e.isAnyCausesFailed(item.Causes...) {
-					allDone = true
-					break
+				for _, item := range e.registered {
+					allDone = allDone && (item.State == Done || item.State == Skipped)
+
+					if item.State == Runnable && item.CausesRequired && e.isAnyCausesFailedOrSkipped(item.Causes...) {
+						item.State = Skipped
+						e.onChangesCb(item.Name, item.State, nil)
+						skippedCount++
+						continue
+					}
+
+					e.onChangesCb(item.Name, item.State, nil)
+
+					if item.State == Runnable && (!item.CausesRequired || e.isCausesDone(item.Causes...)) {
+						item.State = Running
+						e.onChangesCb(item.Name, item.State, nil)
+
+						go func(ctx context.Context, item *StageMeta) {
+							execFnCtx := context.WithValue(ctx, ContextKeyStageName, item.Name)
+
+							if resErr := item.Fn(execFnCtx); resErr != nil {
+								item.Err = resErr
+							}
+
+							item.State = Done
+							e.onChangesCb(item.Name, item.State, item.Err)
+
+							doneCh <- item.Name
+						}(ctx, item)
+					}
 				}
 
-				if item.State == Runnable && e.isCausesDone(item.Causes...) {
-					item.State = Running
-					e.onChangesCb(item.StepName, item.State, nil)
+				if skippedCount > 0 {
+					go func() {
+						allSkippedCh <- struct{}{}
+					}()
+					continue
+				}
 
-					go func(ctx context.Context, item *JobItem) {
-						execFnCtx := context.WithValue(ctx, "step", item.StepName) //nolint:staticcheck
-
-						if resErr := item.Fn(execFnCtx); resErr != nil {
-							item.Err = resErr
-						}
-
-						item.State = Done
-						e.onChangesCb(item.StepName, item.State, item.Err)
-
-						doneCh <- item.StepName
-					}(ctx, item)
+				if allDone {
+					break ExecLoop
 				}
 			}
-
-			if allDone {
-				break
-			}
-
-			time.Sleep(time.Second)
 		}
 
+		if e.finalCb != nil {
+			execFnCtx := context.WithValue(ctx, ContextKeyStageName, Final)
+			_ = e.finalCb(execFnCtx)
+		}
+
+		close(execNextCh)
 		close(doneCh)
+		close(allSkippedCh)
+
 		e.doneFlag = true
 		e.allJobsDoneChan <- struct{}{}
 	}()
+
+	execNextCh <- struct{}{} // initial push running
 
 	return nil
 }
@@ -144,7 +190,7 @@ func (e *executorImpl) IsDone() bool {
 	return e.doneFlag
 }
 
-func (e *executorImpl) isCausesDone(causes ...StepName) bool {
+func (e *executorImpl) isCausesDone(causes ...StageName) bool {
 	for _, s := range causes {
 		if _, exists := e.causesDone[s]; !exists {
 			return false
@@ -153,14 +199,14 @@ func (e *executorImpl) isCausesDone(causes ...StepName) bool {
 	return true
 }
 
-func (e *executorImpl) isAnyCausesFailed(causes ...StepName) bool {
+func (e *executorImpl) isAnyCausesFailedOrSkipped(causes ...StageName) bool {
 	for _, s := range causes {
 		for _, item := range e.registered {
-			if item.StepName != s {
+			if item.Name != s {
 				continue
 			}
 
-			if item.State == Done && item.Err != nil {
+			if (item.State == Done && item.Err != nil) || item.State == Skipped {
 				return true
 			}
 		}
