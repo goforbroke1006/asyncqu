@@ -1,10 +1,13 @@
 package asyncqu
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 func New() Executor {
 	return &executorImpl{
-		registered:      []*StageMeta{},
+		registered:      map[StageName]*StageMeta{},
 		startedFlag:     false,
 		causesDone:      map[StageName]struct{}{},
 		allJobsDoneChan: make(chan struct{}),
@@ -15,7 +18,7 @@ func New() Executor {
 }
 
 type executorImpl struct {
-	registered      []*StageMeta
+	registered      map[StageName]*StageMeta
 	startedFlag     bool
 	causesDone      map[StageName]struct{}
 	allJobsDoneChan chan struct{}
@@ -28,24 +31,41 @@ func (e *executorImpl) SetOnChanges(cb OnChangedCb) {
 	e.onChangesCb = cb
 }
 
-func (e *executorImpl) Append(stageName StageName, fn StageFn, clauses ...StageName) {
-	e.registered = append(e.registered, &StageMeta{
+func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageName) {
+	if _, exists := e.registered[stageName]; exists {
+		panic(fmt.Errorf("stage with name '%s' already exists", stageName))
+	}
+
+	for _, c := range causes {
+		if c == stageName {
+			panic(ErrStageShouldNotWaitForItself)
+		}
+		if c != Start {
+			if _, exists := e.registered[c]; !exists {
+				panic(ErrStageWaitForUnknown)
+			}
+		}
+	}
+
+	item := &StageMeta{
 		Name:           stageName,
 		Fn:             fn,
 		State:          Runnable,
-		Causes:         clauses,
+		Causes:         causes,
 		CausesRequired: true,
-	})
+	}
+	e.registered[stageName] = item
+	e.onChangesCb(item.Name, item.State, nil)
 }
 
-func (e *executorImpl) SetEnd(stageNames ...StageName) {
-	e.registered = append(e.registered, &StageMeta{
+func (e *executorImpl) SetEnd(causes ...StageName) {
+	e.registered[End] = &StageMeta{
 		Name:           End,
 		Fn:             func(ctx context.Context) error { return nil },
 		State:          Runnable,
-		Causes:         stageNames,
+		Causes:         causes,
 		CausesRequired: true,
-	})
+	}
 }
 
 func (e *executorImpl) SetFinal(job StageFn) {
@@ -114,8 +134,6 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 						skippedCount++
 						continue
 					}
-
-					e.onChangesCb(item.Name, item.State, nil)
 
 					if item.State == Runnable && (!item.CausesRequired || e.isCausesDone(item.Causes...)) {
 						item.State = Running

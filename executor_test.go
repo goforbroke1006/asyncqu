@@ -10,29 +10,113 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_executor_Wait(t *testing.T) {
+func Test_executorImpl_SetOnChanges(t *testing.T) {
+	t.Parallel()
+
 	t.Run("negative", func(t *testing.T) {
-		t.Run("Wait() for non-started executor should not lock", func(t *testing.T) {
+		t.Run("run without Wait(), catch error", func(t *testing.T) {
+			var fakeError = errors.New("fake error")
+			const (
+				stage1  = StageName("stage-1")
+				stage2  = StageName("stage-2")
+				stage31 = StageName("stage-3-1")
+				stage32 = StageName("stage-3-2")
+				stage33 = StageName("stage-3-3")
+				stage4  = StageName("stage-4")
+			)
+			//                              /--> stage-3-1 \
+			// start --> stage-1 --> stage-2 --> stage-3-2  --> stage-4 --> end
+			//                              \--> stage-3-3 /
+
 			executor := New()
 
-			executor.SetEnd(Start)
+			fnNormal := func(ctx context.Context) error { return nil }
+			fnWithErr := func(ctx context.Context) error { return fakeError }
 
-			waitFnPassedCh := make(chan error)
-			go func() { waitFnPassedCh <- executor.Wait() }()
-
-			select {
-			case <-time.After(2 * time.Second):
-				t.Error("Wait() keep goroutine too long time")
-				t.FailNow()
-			case err := <-waitFnPassedCh:
-				// test OK
-				assert.ErrorIs(t, ErrExecutorWasNotStarted, err)
+			statesCounter := map[State]int{
+				Runnable: 0,
+				Running:  0,
+				Done:     0,
+				Skipped:  0,
 			}
+
+			executor.SetOnChanges(func(stageName StageName, state State, err error) {
+				if stageName == Start || stageName == End {
+					return
+				}
+				t.Logf("%s %s\n", stageName, state)
+				statesCounter[state]++
+			})
+			executor.Append(stage1, fnNormal, Start)
+			executor.Append(stage2, fnWithErr, stage1)
+			executor.Append(stage31, fnNormal, stage2)
+			executor.Append(stage32, fnNormal, stage2)
+			executor.Append(stage33, fnNormal, stage2)
+			executor.Append(stage4, fnNormal, stage31, stage32, stage33)
+			executor.SetEnd(stage4)
+
+			execErr := executor.AsyncRun(context.TODO())
+			assert.NoError(t, execErr)
+
+			<-time.After(4 * time.Second)
+
+			assert.Equal(t, 6, statesCounter[Runnable]) // six functions registered
+			assert.Equal(t, 2, statesCounter[Running])  // stage-1 and stage-2, another are skipped
+			assert.Equal(t, 2, statesCounter[Done])     // stage-1 and stage-2, another are skipped
+			assert.Equal(t, 4, statesCounter[Skipped])  // stage-31,32,33 and stage-4
+		})
+	})
+}
+
+func Test_executorImpl_Append(t *testing.T) {
+	t.Parallel()
+
+	t.Run("negative", func(t *testing.T) {
+		t.Run("panic: duplicates", func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("The code did not panic")
+				}
+			}()
+
+			executor := New()
+			executor.Append("stage-1", nil, Start)
+			executor.Append("stage-1", nil, Start)
+		})
+
+		t.Run("panic: stage should not wait for itself", func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Errorf("The code did not panic")
+					t.FailNow()
+				}
+				assert.ErrorIs(t, ErrStageShouldNotWaitForItself, r.(error))
+			}()
+
+			executor := New()
+			executor.Append("stage-1", nil, "stage-1")
+		})
+
+		t.Run("panic: stage wait for unknown", func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Errorf("The code did not panic")
+					t.FailNow()
+				}
+				assert.ErrorIs(t, ErrStageWaitForUnknown, r.(error))
+			}()
+
+			executor := New()
+			executor.Append("stage-2", nil, "stage-1")
 		})
 	})
 }
 
 func Test_executor_AsyncRun(t *testing.T) {
+	t.Parallel()
+
 	t.Run("negative", func(t *testing.T) {
 		t.Run("stage 1 failed", func(t *testing.T) {
 			var fakeErr = errors.New("fake error")
@@ -128,28 +212,20 @@ func Test_executor_AsyncRun(t *testing.T) {
 			executor := New()
 			spy := &stageVisitSpy{}
 
-			executor.Append(stage1, func(ctx context.Context) error {
-				stage := ctx.Value(ContextKeyStageName).(StageName)
+			fnWithSleep := func(sleep time.Duration) StageFn {
+				return func(ctx context.Context) error {
+					time.Sleep(sleep)
 
-				spy.Append(stage)
-				t.Logf("stage %s is done", stage)
-				return nil
-			}, Start)
-			executor.Append(stage21, func(ctx context.Context) error {
-				stage := ctx.Value(ContextKeyStageName).(StageName)
+					stage := ctx.Value(ContextKeyStageName).(StageName)
 
-				time.Sleep(250 * time.Millisecond)
-				spy.Append(stage)
-				t.Logf("stage %s is done", stage)
-				return nil
-			}, stage1)
-			executor.Append(stage22, func(ctx context.Context) error {
-				stage := ctx.Value(ContextKeyStageName).(StageName)
-
-				spy.Append(stage)
-				t.Logf("stage %s is done", stage)
-				return nil
-			}, stage1)
+					spy.Append(stage)
+					t.Logf("stage %s is done", stage)
+					return nil
+				}
+			}
+			executor.Append(stage1, fnWithSleep(0), Start)
+			executor.Append(stage21, fnWithSleep(time.Second), stage1)
+			executor.Append(stage22, fnWithSleep(0), stage1)
 			executor.SetEnd(stage21, stage22)
 
 			execErr := executor.AsyncRun(context.TODO())
@@ -167,14 +243,40 @@ func Test_executor_AsyncRun(t *testing.T) {
 	})
 }
 
+func Test_executor_Wait(t *testing.T) {
+	t.Parallel()
+
+	t.Run("negative", func(t *testing.T) {
+		t.Run("Wait() for non-started executor should not lock", func(t *testing.T) {
+			executor := New()
+
+			executor.SetEnd(Start)
+
+			waitFnPassedCh := make(chan error)
+			go func() { waitFnPassedCh <- executor.Wait() }()
+
+			select {
+			case <-time.After(2 * time.Second):
+				t.Error("Wait() keep goroutine too long time")
+				t.FailNow()
+			case err := <-waitFnPassedCh:
+				// test OK
+				assert.ErrorIs(t, ErrExecutorWasNotStarted, err)
+			}
+		})
+	})
+}
+
 func Test_executor_SetFinal(t *testing.T) {
+	t.Parallel()
+
 	t.Run("positive", func(t *testing.T) {
 		t.Run("final cb called even some errors", func(t *testing.T) {
 			var fakeErr = errors.New("fake error")
 
 			const (
 				stage1  = StageName("stage-1")
-				stage2  = StageName("stage-1")
+				stage2  = StageName("stage-2")
 				stage31 = StageName("stage-3-1")
 				stage32 = StageName("stage-3-2")
 			)
@@ -192,6 +294,12 @@ func Test_executor_SetFinal(t *testing.T) {
 				return fakeErr
 			}
 
+			executor.SetOnChanges(func(stageName StageName, state State, err error) {
+				if stageName == Start || stageName == End {
+					return
+				}
+				t.Logf("%s %s\n", stageName, state)
+			})
 			executor.Append(stage1, fnWithErr, Start)
 			executor.Append(stage2, fnWithErr, stage1)
 			executor.Append(stage31, fnWithErr, stage2)
@@ -207,10 +315,11 @@ func Test_executor_SetFinal(t *testing.T) {
 			})
 
 			execErr := executor.AsyncRun(context.TODO())
-			waitErr := executor.Wait()
-
 			assert.NoError(t, execErr)
+
+			waitErr := executor.Wait()
 			assert.NoError(t, waitErr)
+
 			assert.Len(t, executor.Errs(), 1)
 
 			assert.Equal(t, 2, spy.Len()) // only stage-1 and final
