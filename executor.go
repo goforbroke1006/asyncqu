@@ -3,6 +3,7 @@ package asyncqu
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 func New() Executor {
@@ -18,6 +19,8 @@ func New() Executor {
 }
 
 type executorImpl struct {
+	sync.RWMutex
+
 	registered      map[StageName]*StageMeta
 	startedFlag     bool
 	causesDone      map[StageName]struct{}
@@ -28,10 +31,16 @@ type executorImpl struct {
 }
 
 func (e *executorImpl) SetOnChanges(cb OnChangedCb) {
+	e.Lock()
+	defer e.Unlock()
+
 	e.onChangesCb = cb
 }
 
 func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageName) {
+	e.Lock()
+	defer e.Unlock()
+
 	if _, exists := e.registered[stageName]; exists {
 		panic(fmt.Errorf("stage with name '%s' already exists", stageName))
 	}
@@ -59,6 +68,9 @@ func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageNa
 }
 
 func (e *executorImpl) SetEnd(causes ...StageName) {
+	e.Lock()
+	defer e.Unlock()
+
 	e.registered[End] = &StageMeta{
 		Name:           End,
 		Fn:             func(ctx context.Context) error { return nil },
@@ -69,10 +81,16 @@ func (e *executorImpl) SetEnd(causes ...StageName) {
 }
 
 func (e *executorImpl) SetFinal(job StageFn) {
+	e.Lock()
+	defer e.Unlock()
+
 	e.finalCb = job
 }
 
 func (e *executorImpl) hasEnd() bool {
+	e.RLock()
+	defer e.RUnlock()
+
 	for _, reg := range e.registered {
 		if reg.Name == End {
 			return true
@@ -86,8 +104,10 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 		return ErrEndStageIsNotSpecified
 	}
 
+	e.Lock()
 	e.startedFlag = true
 	e.causesDone[Start] = struct{}{}
+	e.Unlock()
 
 	var (
 		allSkippedCh = make(chan struct{})
@@ -109,7 +129,11 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 				if !isOpen {
 					break
 				}
+
+				e.Lock()
 				e.causesDone[stageName] = struct{}{}
+				e.Unlock()
+
 				execNextCh <- struct{}{}
 			}
 		}
@@ -205,10 +229,16 @@ func (e *executorImpl) Errs() []error {
 }
 
 func (e *executorImpl) IsDone() bool {
+	e.RLock()
+	defer e.RUnlock()
+
 	return e.doneFlag
 }
 
 func (e *executorImpl) isCausesDone(causes ...StageName) bool {
+	e.RLock()
+	defer e.RUnlock()
+
 	for _, s := range causes {
 		if _, exists := e.causesDone[s]; !exists {
 			return false
@@ -218,6 +248,9 @@ func (e *executorImpl) isCausesDone(causes ...StageName) bool {
 }
 
 func (e *executorImpl) isAnyCausesFailedOrSkipped(causes ...StageName) bool {
+	e.RLock()
+	defer e.RUnlock()
+
 	for _, s := range causes {
 		for _, item := range e.registered {
 			if item.Name != s {
