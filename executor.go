@@ -8,7 +8,8 @@ import (
 
 func New() Executor {
 	return &executorImpl{
-		registered:      map[StageName]*StageMeta{},
+		stagesMap: map[StageName]*StageMeta{},
+
 		startedFlag:     false,
 		causesDone:      map[StageName]struct{}{},
 		allJobsDoneChan: make(chan struct{}),
@@ -21,7 +22,8 @@ func New() Executor {
 type executorImpl struct {
 	sync.RWMutex
 
-	registered      map[StageName]*StageMeta
+	stagesMap map[StageName]*StageMeta
+
 	startedFlag     bool
 	causesDone      map[StageName]struct{}
 	allJobsDoneChan chan struct{}
@@ -41,7 +43,7 @@ func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageNa
 	e.Lock()
 	defer e.Unlock()
 
-	if _, exists := e.registered[stageName]; exists {
+	if _, exists := e.stagesMap[stageName]; exists {
 		panic(fmt.Errorf("stage with name '%s' already exists", stageName))
 	}
 
@@ -50,7 +52,7 @@ func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageNa
 			panic(ErrStageShouldNotWaitForItself)
 		}
 		if c != Start {
-			if _, exists := e.registered[c]; !exists {
+			if _, exists := e.stagesMap[c]; !exists {
 				panic(ErrStageWaitForUnknown)
 			}
 		}
@@ -63,7 +65,7 @@ func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageNa
 		Causes:         causes,
 		CausesRequired: true,
 	}
-	e.registered[stageName] = item
+	e.stagesMap[stageName] = item
 	e.onChangesCb(item.Name, item.State, nil)
 }
 
@@ -71,7 +73,7 @@ func (e *executorImpl) SetEnd(causes ...StageName) {
 	e.Lock()
 	defer e.Unlock()
 
-	e.registered[End] = &StageMeta{
+	e.stagesMap[End] = &StageMeta{
 		Name:           End,
 		Fn:             func(ctx context.Context) error { return nil },
 		State:          Runnable,
@@ -85,18 +87,6 @@ func (e *executorImpl) SetFinal(job StageFn) {
 	defer e.Unlock()
 
 	e.finalCb = job
-}
-
-func (e *executorImpl) hasEnd() bool {
-	e.RLock()
-	defer e.RUnlock()
-
-	for _, reg := range e.registered {
-		if reg.Name == End {
-			return true
-		}
-	}
-	return false
 }
 
 func (e *executorImpl) AsyncRun(ctx context.Context) error {
@@ -116,6 +106,7 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 	)
 
 	go func() {
+		// catch signal about finished stages
 		for {
 			select {
 			case <-ctx.Done():
@@ -144,12 +135,12 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 		for {
 			select {
 			case <-ctx.Done():
-				return
+				break ExecLoop
 			case <-execNextCh:
 				allDone := true
 				skippedCount := 0
 
-				for _, item := range e.registered {
+				for _, item := range e.stagesMap {
 					allDone = allDone && (item.State == Done || item.State == Skipped)
 
 					if item.State == Runnable && item.CausesRequired && e.isAnyCausesFailedOrSkipped(item.Causes...) {
@@ -173,7 +164,13 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 							item.State = Done
 							e.onChangesCb(item.Name, item.State, item.Err)
 
-							doneCh <- item.Name
+							select {
+							case <-ctx.Done():
+								// ok
+							default:
+								doneCh <- item.Name
+							}
+
 						}(ctx, item)
 					}
 				}
@@ -219,7 +216,7 @@ func (e *executorImpl) Wait() error {
 
 func (e *executorImpl) Errs() []error {
 	errs := make([]error, 0)
-	for _, item := range e.registered {
+	for _, item := range e.stagesMap {
 		if item.Err != nil {
 			errs = append(errs, item.Err)
 		}
@@ -252,7 +249,7 @@ func (e *executorImpl) isAnyCausesFailedOrSkipped(causes ...StageName) bool {
 	defer e.RUnlock()
 
 	for _, s := range causes {
-		for _, item := range e.registered {
+		for _, item := range e.stagesMap {
 			if item.Name != s {
 				continue
 			}
@@ -262,5 +259,18 @@ func (e *executorImpl) isAnyCausesFailedOrSkipped(causes ...StageName) bool {
 			}
 		}
 	}
+	return false
+}
+
+func (e *executorImpl) hasEnd() bool {
+	e.RLock()
+	defer e.RUnlock()
+
+	for _, reg := range e.stagesMap {
+		if reg.Name == End {
+			return true
+		}
+	}
+
 	return false
 }
