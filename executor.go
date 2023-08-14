@@ -111,23 +111,14 @@ func (e *executorImpl) Run(ctx context.Context) error {
 
 	go func(ctx context.Context) {
 		// catch signal about finished stages
-	ReadLoop:
-		for {
-			select {
-			//case <-ctx.Done():
-			//	break ReadLoop
-			case stageName, isOpen := <-doneCh:
-				if !isOpen {
-					break ReadLoop
-				}
+		for stageName := range doneCh {
+			e.Lock()
+			e.causesDone[stageName] = struct{}{}
+			e.Unlock()
 
-				e.Lock()
-				e.causesDone[stageName] = struct{}{}
-				e.Unlock()
-
-				execNextCh <- struct{}{}
-			}
+			execNextCh <- struct{}{}
 		}
+
 		close(execNextCh)
 	}(ctx)
 
