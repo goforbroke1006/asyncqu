@@ -149,7 +149,6 @@ func Test_executor_Run(t *testing.T) {
 	})
 
 	t.Run("negative", func(t *testing.T) {
-
 		t.Run("context canceled before any stage starts", func(t *testing.T) {
 			const (
 				stage1  = StageName("stage-1-load-users-list")
@@ -160,18 +159,17 @@ func Test_executor_Run(t *testing.T) {
 			spy := NewStageVisitSpy()
 
 			executor := New()
-			executor.SetFinal(func(ctx context.Context) error {
-				stage := ctx.Value(ContextKeyStageName).(StageName)
-				spy.Append(stage)
-				return nil
-			})
 			executor.Append(stage1, func(ctx context.Context) error {
 				stage := ctx.Value(ContextKeyStageName).(StageName)
 
-				time.Sleep(1 * time.Second)
+				select {
+				case <-ctx.Done():
+					// ok
+				case <-time.After(1 * time.Second):
+					spy.Append(stage)
+					t.Logf("stage %s is done", stage)
+				}
 
-				spy.Append(stage)
-				t.Logf("stage %s is done", stage)
 				return nil
 			}, Start)
 			executor.Append(stage21, func(ctx context.Context) error {
@@ -190,26 +188,33 @@ func Test_executor_Run(t *testing.T) {
 				return nil
 			}, stage1)
 			executor.SetEnd(stage21, stage22)
+			executor.SetFinal(func(ctx context.Context) error {
+				stage := ctx.Value(ContextKeyStageName).(StageName)
+				spy.Append(stage)
+				return nil
+			})
 
-			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
-			defer execCancel()
+			runCtx, runCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			defer runCancel()
 
-			execErr := executor.Run(execCtx)
+			execErr := executor.Run(runCtx)
 			assert.NoError(t, execErr)
 
 			assert.Equal(t, 1, spy.Len())
 			assert.Equal(t, Final, spy.At(0))
 		})
+
 		t.Run("context canceled after half of stages done", func(t *testing.T) {
 			// TIMEOUT = 600 millis
-			// stage1 200 millis ---> stage2-1 200 millis --> | TIMEOUT 600 millis |
-			//                   \-----------------------------------------------------------> stage2-2 1000 millis
+			// stage1 200 millis ---> stage2-1 200 millis --> | TIMEOUT 600 millis |-----------> stage3
+			//                   \--> stage2-2 1000 millis----------------------------------/
 			// stage2-2 NEVER STARTS
 
 			const (
 				stage1  = StageName("stage-1-load-users-list")
 				stage21 = StageName("stage-2-1-enrich-user-data")
 				stage22 = StageName("stage-2-2-load-payments-info")
+				stage3  = StageName("stage-2-2-generate-CSV")
 			)
 
 			spy := NewStageVisitSpy()
@@ -247,7 +252,16 @@ func Test_executor_Run(t *testing.T) {
 				t.Logf("stage %s is done", stage)
 				return nil
 			}, stage1)
-			executor.SetEnd(stage21, stage22)
+			executor.Append(stage3, func(ctx context.Context) error {
+				stage := ctx.Value(ContextKeyStageName).(StageName)
+
+				time.Sleep(1000 * time.Millisecond)
+
+				spy.Append(stage)
+				t.Logf("stage %s is done", stage)
+				return nil
+			}, stage21, stage22)
+			executor.SetEnd(stage3)
 
 			execCtx, execCancel := context.WithTimeout(context.TODO(), 600*time.Millisecond)
 			defer execCancel()
@@ -255,10 +269,11 @@ func Test_executor_Run(t *testing.T) {
 			execErr := executor.Run(execCtx)
 			assert.NoError(t, execErr)
 
-			assert.Equal(t, 3, spy.Len())
+			assert.Equal(t, 4, spy.Len())
 			assert.Equal(t, stage1, spy.At(0))
 			assert.Equal(t, stage21, spy.At(1))
-			assert.Equal(t, Final, spy.At(2))
+			assert.Equal(t, stage22, spy.At(2))
+			assert.Equal(t, Final, spy.At(3))
 		})
 
 		t.Run("stage 1 failed", func(t *testing.T) {
@@ -377,6 +392,70 @@ func Test_executor_Run(t *testing.T) {
 			assert.Equal(t, stage22, spy.At(1))
 			assert.Equal(t, stage21, spy.At(2))
 		})
+
+		t.Run("one stage fail and one stuck", func(t *testing.T) {
+			const (
+				stage1  = StageName("stage-1")
+				stage21 = StageName("stage-2-1")
+				stage22 = StageName("stage-2-2")
+			)
+			var fakeErr = errors.New("fake errors")
+
+			spy := NewStageVisitSpy()
+
+			executor := New()
+			executor.Append(stage1, func(ctx context.Context) error {
+				stage := ctx.Value(ContextKeyStageName).(StageName)
+
+				select {
+				case <-ctx.Done():
+					// ok
+				case <-time.After(100 * time.Millisecond):
+					spy.Append(stage)
+					t.Logf("stage %s is done", stage)
+				}
+
+				return nil
+			}, Start)
+			executor.Append(stage21, func(ctx context.Context) error {
+				stage := ctx.Value(ContextKeyStageName).(StageName)
+
+				select {
+				case <-ctx.Done():
+					// ok
+				case <-time.After(1000 * time.Millisecond):
+					spy.Append(stage)
+					t.Logf("stage %s is done", stage)
+				}
+
+				return fakeErr
+			}, stage1)
+			executor.Append(stage22, func(ctx context.Context) error {
+				stage := ctx.Value(ContextKeyStageName).(StageName)
+
+				select {
+				case <-ctx.Done():
+					// ok
+				case <-time.After(2000 * time.Millisecond):
+					spy.Append(stage)
+					t.Logf("stage %s is done", stage)
+				}
+
+				return nil
+			}, stage1)
+			executor.SetEnd(stage21, stage22)
+
+			runCtx, runCancel := context.WithTimeout(context.TODO(), 2500*time.Millisecond)
+			defer runCancel()
+
+			runErr := executor.Run(runCtx)
+			assert.NoError(t, runErr)
+
+			assert.Equal(t, 3, spy.Len())
+			assert.Equal(t, stage1, spy.At(0))
+			assert.Equal(t, stage21, spy.At(1))
+			assert.Equal(t, stage22, spy.At(2))
+		})
 	})
 }
 
@@ -435,6 +514,60 @@ func Test_executor_SetFinal(t *testing.T) {
 			assert.Equal(t, 2, spy.Len()) // only stage-1 and final
 			assert.Equal(t, stage1, spy.At(0))
 			assert.Equal(t, Final, spy.At(1))
+		})
+
+		t.Run("final cb called after stage without any error", func(t *testing.T) {
+			const (
+				stage1  = StageName("stage-1")
+				stage2  = StageName("stage-2")
+				stage31 = StageName("stage-3-1")
+				stage32 = StageName("stage-3-2")
+			)
+			// start --> stage-1 -- ERROR --> stage-2 --> stage-3-1  --> end
+			//                                       \--> stage-3-2 /
+
+			executor := New()
+			spy := NewStageVisitSpy()
+
+			fnNoErr := func(ctx context.Context) error {
+				stage := ctx.Value(ContextKeyStageName).(StageName)
+
+				spy.Append(stage)
+				t.Logf("stage %s is done", stage)
+				return nil
+			}
+
+			executor.SetOnChanges(func(stageName StageName, state State, err error) {
+				if stageName == Start || stageName == End {
+					return
+				}
+				t.Logf("%s %s\n", stageName, state)
+			})
+			executor.Append(stage1, fnNoErr, Start)
+			executor.Append(stage2, fnNoErr, stage1)
+			executor.Append(stage31, fnNoErr, stage2)
+			executor.Append(stage32, fnNoErr, stage2)
+			executor.SetEnd(stage31, stage32)
+			executor.SetFinal(func(ctx context.Context) error {
+				stage := ctx.Value(ContextKeyStageName).(StageName)
+
+				spy.Append(stage)
+				t.Log("final")
+
+				return nil
+			})
+
+			execErr := executor.Run(context.TODO())
+			assert.NoError(t, execErr)
+
+			assert.Len(t, executor.Errs(), 0)
+
+			assert.Equal(t, 5, spy.Len()) // only stage-1 and final
+			assert.Equal(t, stage1, spy.At(0))
+			assert.Equal(t, stage2, spy.At(1))
+			assert.True(t, stage31 == spy.At(2) || stage32 == spy.At(2)) // 31 or 32 because it's async
+			assert.True(t, stage31 == spy.At(3) || stage32 == spy.At(3)) // 31 or 32 because it's async
+			assert.Equal(t, Final, spy.At(4))
 		})
 	})
 }

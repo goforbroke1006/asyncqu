@@ -10,11 +10,10 @@ func New() Executor {
 	return &executorImpl{
 		stagesMap: map[StageName]*StageMeta{
 			End: {
-				Name:           End,
-				Fn:             func(ctx context.Context) error { return nil },
-				State:          Runnable,
-				Causes:         []StageName{Start},
-				CausesRequired: true,
+				Name:   End,
+				Fn:     func(ctx context.Context) error { return nil },
+				State:  Runnable,
+				Causes: []StageName{Start},
 			},
 		},
 
@@ -65,11 +64,10 @@ func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageNa
 	}
 
 	item := &StageMeta{
-		Name:           stageName,
-		Fn:             fn,
-		State:          Runnable,
-		Causes:         causes,
-		CausesRequired: true,
+		Name:   stageName,
+		Fn:     fn,
+		State:  Runnable,
+		Causes: causes,
 	}
 	e.stagesMap[stageName] = item
 	e.onChangesCb(item.Name, item.State, nil)
@@ -80,11 +78,10 @@ func (e *executorImpl) SetEnd(causes ...StageName) {
 	defer e.Unlock()
 
 	e.stagesMap[End] = &StageMeta{
-		Name:           End,
-		Fn:             func(ctx context.Context) error { return nil },
-		State:          Runnable,
-		Causes:         causes,
-		CausesRequired: true,
+		Name:   End,
+		Fn:     func(ctx context.Context) error { return nil },
+		State:  Runnable,
+		Causes: causes,
 	}
 }
 
@@ -114,13 +111,14 @@ func (e *executorImpl) Run(ctx context.Context) error {
 
 	go func(ctx context.Context) {
 		// catch signal about finished stages
+	ReadLoop:
 		for {
 			select {
-			case <-ctx.Done():
-				return
+			//case <-ctx.Done():
+			//	break ReadLoop
 			case stageName, isOpen := <-doneCh:
 				if !isOpen {
-					break
+					break ReadLoop
 				}
 
 				e.Lock()
@@ -130,7 +128,10 @@ func (e *executorImpl) Run(ctx context.Context) error {
 				execNextCh <- struct{}{}
 			}
 		}
+		close(execNextCh)
 	}(ctx)
+
+	activeTasksWg := sync.WaitGroup{}
 
 ExecLoop:
 	for {
@@ -142,23 +143,29 @@ ExecLoop:
 			skippedCount := 0
 
 			for _, item := range e.stagesMap {
-				allDone = allDone && (item.State == Done || item.State == Skipped)
+				if item.State == Done || item.State == Skipped {
+					continue
+				}
 
-				if item.State == Runnable && item.CausesRequired && e.isAnyCausesFailedOrSkipped(item.Causes...) {
+				allDone = false
+
+				if item.State == Runnable && e.isAnyCausesFailedOrSkipped(item.Causes...) {
 					item.State = Skipped
 					e.onChangesCb(item.Name, item.State, nil)
 					skippedCount++
 					continue
 				}
 
-				if item.State == Runnable && (!item.CausesRequired || e.isCausesDone(item.Causes...)) {
+				if item.State == Runnable && e.isCausesDone(item.Causes...) {
 					item.State = Running
 					e.onChangesCb(item.Name, item.State, nil)
 
-					go func(ctx context.Context, item *StageMeta) {
-						execFnCtx := context.WithValue(ctx, ContextKeyStageName, item.Name)
+					activeTasksWg.Add(1)
 
+					go func(ctx context.Context, item *StageMeta) {
 						if item.Fn != nil {
+							execFnCtx := context.WithValue(ctx, ContextKeyStageName, item.Name)
+
 							if resErr := item.Fn(execFnCtx); resErr != nil {
 								item.Err = resErr
 							}
@@ -167,13 +174,9 @@ ExecLoop:
 						item.State = Done
 						e.onChangesCb(item.Name, item.State, item.Err)
 
-						select {
-						case <-ctx.Done():
-							// ok
-						default:
-							doneCh <- item.Name
-						}
+						doneCh <- item.Name
 
+						activeTasksWg.Done()
 					}(ctx, item)
 				}
 			}
@@ -198,14 +201,13 @@ ExecLoop:
 		e.onChangesCb(e.stagesMap[stageName].Name, e.stagesMap[stageName].State, nil)
 	}
 
+	activeTasksWg.Wait()
+	close(doneCh)
+
 	if e.finalCb != nil {
 		execFnCtx := context.WithValue(ctx, ContextKeyStageName, Final)
 		_ = e.finalCb(execFnCtx)
 	}
-
-	//close(execNextCh)
-	//close(doneCh)
-	//close(allSkippedCh)
 
 	return nil
 }

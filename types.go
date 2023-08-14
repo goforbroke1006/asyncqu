@@ -18,10 +18,9 @@ const (
 )
 
 type StageMeta struct {
-	Name           StageName
-	Fn             StageFn
-	State          State
-	Causes         []StageName
-	CausesRequired bool
-	Err            error
+	Name   StageName
+	Fn     StageFn
+	State  State
+	Causes []StageName
+	Err    error
 }
