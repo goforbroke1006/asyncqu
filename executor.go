@@ -8,7 +8,15 @@ import (
 
 func New() Executor {
 	return &executorImpl{
-		stagesMap: map[StageName]*StageMeta{},
+		stagesMap: map[StageName]*StageMeta{
+			End: {
+				Name:           End,
+				Fn:             func(ctx context.Context) error { return nil },
+				State:          Runnable,
+				Causes:         []StageName{Start},
+				CausesRequired: true,
+			},
+		},
 
 		startedFlag: false,
 		causesDone:  map[StageName]struct{}{},
@@ -38,6 +46,8 @@ func (e *executorImpl) SetOnChanges(cb OnChangedCb) {
 func (e *executorImpl) Append(stageName StageName, fn StageFn, causes ...StageName) {
 	e.Lock()
 	defer e.Unlock()
+
+	delete(e.stagesMap, End)
 
 	if _, exists := e.stagesMap[stageName]; exists {
 		panic(fmt.Errorf("stage with name '%s' already exists", stageName))
@@ -96,9 +106,8 @@ func (e *executorImpl) Run(ctx context.Context) error {
 	e.Unlock()
 
 	var (
-		allSkippedCh = make(chan struct{})
-		doneCh       = make(chan StageName)
-		execNextCh   = make(chan struct{}, 1)
+		doneCh     = make(chan StageName)
+		execNextCh = make(chan struct{}, 1)
 	)
 
 	execNextCh <- struct{}{} // initial push running
@@ -109,11 +118,6 @@ func (e *executorImpl) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return
-			case _, isOpen := <-allSkippedCh:
-				if !isOpen {
-					break
-				}
-				execNextCh <- struct{}{}
 			case stageName, isOpen := <-doneCh:
 				if !isOpen {
 					break
@@ -154,8 +158,10 @@ ExecLoop:
 					go func(ctx context.Context, item *StageMeta) {
 						execFnCtx := context.WithValue(ctx, ContextKeyStageName, item.Name)
 
-						if resErr := item.Fn(execFnCtx); resErr != nil {
-							item.Err = resErr
+						if item.Fn != nil {
+							if resErr := item.Fn(execFnCtx); resErr != nil {
+								item.Err = resErr
+							}
 						}
 
 						item.State = Done
@@ -173,9 +179,6 @@ ExecLoop:
 			}
 
 			if skippedCount > 0 {
-				go func() {
-					allSkippedCh <- struct{}{}
-				}()
 				break ExecLoop
 			}
 

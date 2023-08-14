@@ -111,28 +111,37 @@ func Test_executorImpl_Append(t *testing.T) {
 	})
 }
 
-func Test_executor_AsyncRun(t *testing.T) {
+func Test_executor_Run(t *testing.T) {
 	t.Parallel()
 
 	t.Run("check END stage", func(t *testing.T) {
 		t.Parallel()
 
 		t.Run("negative - no END stage", func(t *testing.T) {
-			executor := New()
-
 			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
 			defer execCancel()
 
+			executor := New()
+			executor.Append("some-stage", nil, Start)
 			execErr := executor.Run(execCtx)
 			assert.ErrorIs(t, execErr, ErrEndStageIsNotSpecified)
 		})
 
-		t.Run("positive - START == END stage", func(t *testing.T) {
-			executor := New()
-			executor.SetEnd(Start)
-
+		t.Run("positive - no END stage so START == END", func(t *testing.T) {
 			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
 			defer execCancel()
+
+			executor := New()
+			execErr := executor.Run(execCtx)
+			assert.NoError(t, execErr)
+		})
+
+		t.Run("positive - START == END stage", func(t *testing.T) {
+			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
+			defer execCancel()
+
+			executor := New()
+			executor.SetEnd(Start)
 
 			execErr := executor.Run(execCtx)
 			assert.NoError(t, execErr)
