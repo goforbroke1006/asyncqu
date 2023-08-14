@@ -193,9 +193,9 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 			_ = e.finalCb(execFnCtx)
 		}
 
-		close(execNextCh)
-		close(doneCh)
-		close(allSkippedCh)
+		//close(execNextCh)
+		//close(doneCh)
+		//close(allSkippedCh)
 
 		e.doneFlag = true
 		e.allJobsDoneChan <- struct{}{}
