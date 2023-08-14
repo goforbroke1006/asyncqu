@@ -54,10 +54,8 @@ func Test_executorImpl_SetOnChanges(t *testing.T) {
 			executor.Append(stage4, fnNormal, stage31, stage32, stage33)
 			executor.SetEnd(stage4)
 
-			execErr := executor.AsyncRun(context.TODO())
+			execErr := executor.Run(context.TODO())
 			assert.NoError(t, execErr)
-
-			<-time.After(4 * time.Second)
 
 			assert.Equal(t, 6, statesCounter[Runnable]) // six functions registered
 			assert.Equal(t, 2, statesCounter[Running])  // stage-1 and stage-2, another are skipped
@@ -125,11 +123,8 @@ func Test_executor_AsyncRun(t *testing.T) {
 			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
 			defer execCancel()
 
-			execErr := executor.AsyncRun(execCtx)
-			waitErr := executor.Wait()
-
+			execErr := executor.Run(execCtx)
 			assert.ErrorIs(t, execErr, ErrEndStageIsNotSpecified)
-			assert.ErrorIs(t, waitErr, ErrExecutorWasNotStarted)
 		})
 
 		t.Run("positive - START == END stage", func(t *testing.T) {
@@ -139,11 +134,8 @@ func Test_executor_AsyncRun(t *testing.T) {
 			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
 			defer execCancel()
 
-			execErr := executor.AsyncRun(execCtx)
-			waitErr := executor.Wait()
-
+			execErr := executor.Run(execCtx)
 			assert.NoError(t, execErr)
-			assert.NoError(t, waitErr)
 		})
 	})
 
@@ -193,11 +185,8 @@ func Test_executor_AsyncRun(t *testing.T) {
 			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
 			defer execCancel()
 
-			execErr := executor.AsyncRun(execCtx)
-			waitErr := executor.Wait()
-
+			execErr := executor.Run(execCtx)
 			assert.NoError(t, execErr)
-			assert.NoError(t, waitErr)
 
 			assert.Equal(t, 1, spy.Len())
 			assert.Equal(t, Final, spy.At(0))
@@ -254,11 +243,8 @@ func Test_executor_AsyncRun(t *testing.T) {
 			execCtx, execCancel := context.WithTimeout(context.TODO(), 600*time.Millisecond)
 			defer execCancel()
 
-			execErr := executor.AsyncRun(execCtx)
-			waitErr := executor.Wait()
-
+			execErr := executor.Run(execCtx)
 			assert.NoError(t, execErr)
-			assert.NoError(t, waitErr)
 
 			assert.Equal(t, 3, spy.Len())
 			assert.Equal(t, stage1, spy.At(0))
@@ -304,11 +290,9 @@ func Test_executor_AsyncRun(t *testing.T) {
 			}, stage1)
 			executor.SetEnd(stage21, stage22)
 
-			execErr := executor.AsyncRun(context.TODO())
-			waitErr := executor.Wait()
-
+			execErr := executor.Run(context.TODO())
 			assert.NoError(t, execErr)
-			assert.NoError(t, waitErr)
+
 			assert.Len(t, executor.Errs(), 1)
 
 			assert.Equal(t, 1, spy.Len())
@@ -322,14 +306,10 @@ func Test_executor_AsyncRun(t *testing.T) {
 
 			executor.SetEnd(Start)
 
-			execErr := executor.AsyncRun(context.TODO())
-			waitErr := executor.Wait()
-			done := executor.IsDone()
-
+			execErr := executor.Run(context.TODO())
 			assert.NoError(t, execErr)
-			assert.NoError(t, waitErr)
+
 			assert.Len(t, executor.Errs(), 0)
-			assert.True(t, done)
 		})
 
 		t.Run("one stage", func(t *testing.T) {
@@ -344,14 +324,10 @@ func Test_executor_AsyncRun(t *testing.T) {
 			}, Start)
 			executor.SetEnd(stage1)
 
-			execErr := executor.AsyncRun(context.TODO())
-			waitErr := executor.Wait()
-			done := executor.IsDone()
-
+			execErr := executor.Run(context.TODO())
 			assert.NoError(t, execErr)
-			assert.NoError(t, waitErr)
+
 			assert.Len(t, executor.Errs(), 0)
-			assert.True(t, done)
 		})
 
 		t.Run("many stages", func(t *testing.T) {
@@ -382,43 +358,15 @@ func Test_executor_AsyncRun(t *testing.T) {
 			executor.Append(stage22, fnWithSleep(0), stage1)
 			executor.SetEnd(stage21, stage22)
 
-			execErr := executor.AsyncRun(context.TODO())
-			waitErr := executor.Wait()
-			done := executor.IsDone()
-
+			execErr := executor.Run(context.TODO())
 			assert.NoError(t, execErr)
-			assert.NoError(t, waitErr)
+
 			assert.Len(t, executor.Errs(), 0)
-			assert.True(t, done)
 
 			assert.Equal(t, 3, spy.Len())
 			assert.Equal(t, stage1, spy.At(0))
 			assert.Equal(t, stage22, spy.At(1))
 			assert.Equal(t, stage21, spy.At(2))
-		})
-	})
-}
-
-func Test_executor_Wait(t *testing.T) {
-	t.Parallel()
-
-	t.Run("negative", func(t *testing.T) {
-		t.Run("Wait() for non-started executor should not lock", func(t *testing.T) {
-			executor := New()
-
-			executor.SetEnd(Start)
-
-			waitFnPassedCh := make(chan error)
-			go func() { waitFnPassedCh <- executor.Wait() }()
-
-			select {
-			case <-time.After(2 * time.Second):
-				t.Error("Wait() keep goroutine too long time")
-				t.FailNow()
-			case err := <-waitFnPassedCh:
-				// test OK
-				assert.ErrorIs(t, ErrExecutorWasNotStarted, err)
-			}
 		})
 	})
 }
@@ -470,11 +418,8 @@ func Test_executor_SetFinal(t *testing.T) {
 				return nil
 			})
 
-			execErr := executor.AsyncRun(context.TODO())
+			execErr := executor.Run(context.TODO())
 			assert.NoError(t, execErr)
-
-			waitErr := executor.Wait()
-			assert.NoError(t, waitErr)
 
 			assert.Len(t, executor.Errs(), 1)
 

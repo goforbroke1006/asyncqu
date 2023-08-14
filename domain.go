@@ -7,9 +7,7 @@ type Executor interface {
 	Append(stageName StageName, fn StageFn, clauses ...StageName)
 	SetFinal(fn StageFn)
 	SetEnd(stageNames ...StageName)
-	AsyncRun(ctx context.Context) error
-	Wait() error
-	IsDone() bool
+	Run(ctx context.Context) error
 	Errs() []error
 }
 

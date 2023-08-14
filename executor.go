@@ -10,12 +10,10 @@ func New() Executor {
 	return &executorImpl{
 		stagesMap: map[StageName]*StageMeta{},
 
-		startedFlag:     false,
-		causesDone:      map[StageName]struct{}{},
-		allJobsDoneChan: make(chan struct{}),
-		doneFlag:        false,
-		onChangesCb:     func(name StageName, state State, err error) {},
-		finalCb:         nil,
+		startedFlag: false,
+		causesDone:  map[StageName]struct{}{},
+		onChangesCb: func(name StageName, state State, err error) {},
+		finalCb:     nil,
 	}
 }
 
@@ -24,12 +22,10 @@ type executorImpl struct {
 
 	stagesMap map[StageName]*StageMeta
 
-	startedFlag     bool
-	causesDone      map[StageName]struct{}
-	allJobsDoneChan chan struct{}
-	doneFlag        bool
-	onChangesCb     OnChangedCb
-	finalCb         StageFn
+	startedFlag bool
+	causesDone  map[StageName]struct{}
+	onChangesCb OnChangedCb
+	finalCb     StageFn
 }
 
 func (e *executorImpl) SetOnChanges(cb OnChangedCb) {
@@ -89,7 +85,7 @@ func (e *executorImpl) SetFinal(job StageFn) {
 	e.finalCb = job
 }
 
-func (e *executorImpl) AsyncRun(ctx context.Context) error {
+func (e *executorImpl) Run(ctx context.Context) error {
 	if !e.hasEnd() {
 		return ErrEndStageIsNotSpecified
 	}
@@ -107,7 +103,7 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 
 	execNextCh <- struct{}{} // initial push running
 
-	go func() {
+	go func(ctx context.Context) {
 		// catch signal about finished stages
 		for {
 			select {
@@ -130,87 +126,84 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 				execNextCh <- struct{}{}
 			}
 		}
-	}()
+	}(ctx)
 
-	go func() {
-	ExecLoop:
-		for {
-			select {
-			case <-ctx.Done():
-				break ExecLoop
-			case <-execNextCh:
-				allDone := true
-				skippedCount := 0
+ExecLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			break ExecLoop
+		case <-execNextCh:
+			allDone := true
+			skippedCount := 0
 
-				for _, item := range e.stagesMap {
-					allDone = allDone && (item.State == Done || item.State == Skipped)
+			for _, item := range e.stagesMap {
+				allDone = allDone && (item.State == Done || item.State == Skipped)
 
-					if item.State == Runnable && item.CausesRequired && e.isAnyCausesFailedOrSkipped(item.Causes...) {
-						item.State = Skipped
-						e.onChangesCb(item.Name, item.State, nil)
-						skippedCount++
-						continue
-					}
-
-					if item.State == Runnable && (!item.CausesRequired || e.isCausesDone(item.Causes...)) {
-						item.State = Running
-						e.onChangesCb(item.Name, item.State, nil)
-
-						go func(ctx context.Context, item *StageMeta) {
-							execFnCtx := context.WithValue(ctx, ContextKeyStageName, item.Name)
-
-							if resErr := item.Fn(execFnCtx); resErr != nil {
-								item.Err = resErr
-							}
-
-							item.State = Done
-							e.onChangesCb(item.Name, item.State, item.Err)
-
-							select {
-							case <-ctx.Done():
-								// ok
-							default:
-								doneCh <- item.Name
-							}
-
-						}(ctx, item)
-					}
-				}
-
-				if skippedCount > 0 {
-					go func() {
-						allSkippedCh <- struct{}{}
-					}()
+				if item.State == Runnable && item.CausesRequired && e.isAnyCausesFailedOrSkipped(item.Causes...) {
+					item.State = Skipped
+					e.onChangesCb(item.Name, item.State, nil)
+					skippedCount++
 					continue
 				}
 
-				if allDone {
-					break ExecLoop
+				if item.State == Runnable && (!item.CausesRequired || e.isCausesDone(item.Causes...)) {
+					item.State = Running
+					e.onChangesCb(item.Name, item.State, nil)
+
+					go func(ctx context.Context, item *StageMeta) {
+						execFnCtx := context.WithValue(ctx, ContextKeyStageName, item.Name)
+
+						if resErr := item.Fn(execFnCtx); resErr != nil {
+							item.Err = resErr
+						}
+
+						item.State = Done
+						e.onChangesCb(item.Name, item.State, item.Err)
+
+						select {
+						case <-ctx.Done():
+							// ok
+						default:
+							doneCh <- item.Name
+						}
+
+					}(ctx, item)
 				}
 			}
+
+			if skippedCount > 0 {
+				go func() {
+					allSkippedCh <- struct{}{}
+				}()
+				break ExecLoop
+			}
+
+			if allDone {
+				break ExecLoop
+			}
 		}
-
-		if e.finalCb != nil {
-			execFnCtx := context.WithValue(ctx, ContextKeyStageName, Final)
-			_ = e.finalCb(execFnCtx)
-		}
-
-		//close(execNextCh)
-		//close(doneCh)
-		//close(allSkippedCh)
-
-		e.doneFlag = true
-		e.allJobsDoneChan <- struct{}{}
-	}()
-
-	return nil
-}
-
-func (e *executorImpl) Wait() error {
-	if !e.startedFlag {
-		return ErrExecutorWasNotStarted
 	}
-	<-e.allJobsDoneChan
+
+	// mark all skipped stages as Skipped
+	for stageName := range e.stagesMap {
+		if e.stagesMap[stageName].State != Runnable {
+			continue
+		}
+
+		e.stagesMap[stageName].State = Skipped
+		e.onChangesCb(e.stagesMap[stageName].Name, e.stagesMap[stageName].State, nil)
+	}
+
+	if e.finalCb != nil {
+		execFnCtx := context.WithValue(ctx, ContextKeyStageName, Final)
+		_ = e.finalCb(execFnCtx)
+	}
+
+	//close(execNextCh)
+	//close(doneCh)
+	//close(allSkippedCh)
+
 	return nil
 }
 
@@ -223,13 +216,6 @@ func (e *executorImpl) Errs() []error {
 	}
 
 	return errs
-}
-
-func (e *executorImpl) IsDone() bool {
-	e.RLock()
-	defer e.RUnlock()
-
-	return e.doneFlag
 }
 
 func (e *executorImpl) isCausesDone(causes ...StageName) bool {

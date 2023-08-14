@@ -55,12 +55,10 @@ func main() {
 
 	executor.SetEnd(stage3Aggregate1, stage3Aggregate2, stage4Additional1)
 
-	if runErr := executor.AsyncRun(context.Background()); runErr != nil {
+	if runErr := executor.Run(context.Background()); runErr != nil {
 		fmt.Printf("ERROR: %s\n", runErr.Error())
 		os.Exit(1)
 	}
-
-	_ = executor.Wait()
 
 	if execErrs := executor.Errs(); len(execErrs) > 0 {
 		for _, err := range execErrs {
