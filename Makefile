@@ -20,6 +20,10 @@ lint: prepare ## Check source code with linter
 	@golangci-lint run -v .
 .PHONY: lint
 
+coverage: test ## Run code coverage visual tool to inspect uncovered parts of project
+	go tool cover -html ./coverage.out
+.PHONY: coverage
+
 BLUE   = \033[36m
 NC 	   = \033[0m
 

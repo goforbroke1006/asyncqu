@@ -3,7 +3,6 @@ package asyncqu
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -117,7 +116,39 @@ func Test_executorImpl_Append(t *testing.T) {
 func Test_executor_AsyncRun(t *testing.T) {
 	t.Parallel()
 
+	t.Run("check END stage", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("negative - no END stage", func(t *testing.T) {
+			executor := New()
+
+			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
+			defer execCancel()
+
+			execErr := executor.AsyncRun(execCtx)
+			waitErr := executor.Wait()
+
+			assert.ErrorIs(t, execErr, ErrEndStageIsNotSpecified)
+			assert.ErrorIs(t, waitErr, ErrExecutorWasNotStarted)
+		})
+
+		t.Run("positive - START == END stage", func(t *testing.T) {
+			executor := New()
+			executor.SetEnd(Start)
+
+			execCtx, execCancel := context.WithTimeout(context.TODO(), 250*time.Millisecond)
+			defer execCancel()
+
+			execErr := executor.AsyncRun(execCtx)
+			waitErr := executor.Wait()
+
+			assert.NoError(t, execErr)
+			assert.NoError(t, waitErr)
+		})
+	})
+
 	t.Run("negative", func(t *testing.T) {
+
 		t.Run("context canceled before any stage starts", func(t *testing.T) {
 			const (
 				stage1  = StageName("stage-1-load-users-list")
@@ -125,7 +156,7 @@ func Test_executor_AsyncRun(t *testing.T) {
 				stage22 = StageName("stage-2-2-load-payments-info")
 			)
 
-			spy := &stageVisitSpy{}
+			spy := NewStageVisitSpy()
 
 			executor := New()
 			executor.SetFinal(func(ctx context.Context) error {
@@ -183,7 +214,7 @@ func Test_executor_AsyncRun(t *testing.T) {
 				stage22 = StageName("stage-2-2-load-payments-info")
 			)
 
-			spy := &stageVisitSpy{}
+			spy := NewStageVisitSpy()
 
 			executor := New()
 			executor.SetFinal(func(ctx context.Context) error {
@@ -247,7 +278,7 @@ func Test_executor_AsyncRun(t *testing.T) {
 			//                  \--> stage-2-2 /
 
 			executor := New()
-			spy := &stageVisitSpy{}
+			spy := NewStageVisitSpy()
 
 			executor.Append(stage1, func(ctx context.Context) error {
 				stage := ctx.Value(ContextKeyStageName).(StageName)
@@ -292,10 +323,13 @@ func Test_executor_AsyncRun(t *testing.T) {
 			executor.SetEnd(Start)
 
 			execErr := executor.AsyncRun(context.TODO())
-			_ = executor.Wait()
+			waitErr := executor.Wait()
+			done := executor.IsDone()
 
 			assert.NoError(t, execErr)
+			assert.NoError(t, waitErr)
 			assert.Len(t, executor.Errs(), 0)
+			assert.True(t, done)
 		})
 
 		t.Run("one stage", func(t *testing.T) {
@@ -311,10 +345,13 @@ func Test_executor_AsyncRun(t *testing.T) {
 			executor.SetEnd(stage1)
 
 			execErr := executor.AsyncRun(context.TODO())
-			_ = executor.Wait()
+			waitErr := executor.Wait()
+			done := executor.IsDone()
 
 			assert.NoError(t, execErr)
+			assert.NoError(t, waitErr)
 			assert.Len(t, executor.Errs(), 0)
+			assert.True(t, done)
 		})
 
 		t.Run("many stages", func(t *testing.T) {
@@ -327,7 +364,7 @@ func Test_executor_AsyncRun(t *testing.T) {
 			//                  \--> stage-2-2 /
 
 			executor := New()
-			spy := &stageVisitSpy{}
+			spy := NewStageVisitSpy()
 
 			fnWithSleep := func(sleep time.Duration) StageFn {
 				return func(ctx context.Context) error {
@@ -347,10 +384,12 @@ func Test_executor_AsyncRun(t *testing.T) {
 
 			execErr := executor.AsyncRun(context.TODO())
 			waitErr := executor.Wait()
+			done := executor.IsDone()
 
 			assert.NoError(t, execErr)
 			assert.NoError(t, waitErr)
 			assert.Len(t, executor.Errs(), 0)
+			assert.True(t, done)
 
 			assert.Equal(t, 3, spy.Len())
 			assert.Equal(t, stage1, spy.At(0))
@@ -401,7 +440,7 @@ func Test_executor_SetFinal(t *testing.T) {
 			//                                       \--> stage-3-2 /
 
 			executor := New()
-			spy := &stageVisitSpy{}
+			spy := NewStageVisitSpy()
 
 			fnWithErr := func(ctx context.Context) error {
 				stage := ctx.Value(ContextKeyStageName).(StageName)
@@ -444,31 +483,4 @@ func Test_executor_SetFinal(t *testing.T) {
 			assert.Equal(t, Final, spy.At(1))
 		})
 	})
-}
-
-type stageVisitSpy struct {
-	narrative   []StageName
-	narrativeMx sync.RWMutex
-}
-
-func (spy *stageVisitSpy) Append(stage StageName) {
-	spy.narrativeMx.Lock()
-	spy.narrative = append(spy.narrative, stage)
-	spy.narrativeMx.Unlock()
-}
-
-func (spy *stageVisitSpy) Len() int {
-	spy.narrativeMx.RLock()
-	length := len(spy.narrative)
-	spy.narrativeMx.RUnlock()
-
-	return length
-}
-
-func (spy *stageVisitSpy) At(index int) StageName {
-	spy.narrativeMx.RLock()
-	name := spy.narrative[index]
-	spy.narrativeMx.RUnlock()
-
-	return name
 }

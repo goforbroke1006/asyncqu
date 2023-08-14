@@ -102,8 +102,10 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 	var (
 		allSkippedCh = make(chan struct{})
 		doneCh       = make(chan StageName)
-		execNextCh   = make(chan struct{})
+		execNextCh   = make(chan struct{}, 1)
 	)
+
+	execNextCh <- struct{}{} // initial push running
 
 	go func() {
 		// catch signal about finished stages
@@ -200,8 +202,6 @@ func (e *executorImpl) AsyncRun(ctx context.Context) error {
 		e.doneFlag = true
 		e.allJobsDoneChan <- struct{}{}
 	}()
-
-	execNextCh <- struct{}{} // initial push running
 
 	return nil
 }
